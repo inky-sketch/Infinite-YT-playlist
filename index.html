@@ -22,12 +22,18 @@
         .controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
         textarea { width: 100%; background: #222; color: #fff; border: 1px solid #333; padding: 12px; border-radius: 8px; font-size: 14px; outline: none; resize: vertical; min-height: 80px; }
         textarea:focus { border-color: #3ea6ff; }
-        button { background: #ff0000; color: #fff; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; width: 100%; }
+        .btn-row { display: flex; gap: 8px; }
+        button { color: #fff; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; flex: 1; }
         button:active { opacity: 0.8; }
+        button:disabled { background: #555 !important; cursor: not-allowed; }
+        .add-btn { background: #ff0000; }
+        .shuffle-btn { background: #3ea6ff; color: #000; }
+        .restore-btn { background: #444; }
         ul { list-style: none; padding: 0; margin: 0; max-height: 35vh; overflow-y: auto; background: #181818; border-radius: 12px; border: 1px solid #282828; }
         li { padding: 12px 16px; border-bottom: 1px solid #282828; display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer; }
         li:last-child { border-bottom: none; }
         li.active { background: #272727; color: #3ea6ff; font-weight: bold; }
+        .title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 85%; }
         .del-btn { background: none; color: #aaa; border: none; cursor: pointer; font-size: 16px; padding: 4px; }
         .del-btn:hover { color: #ff4444; }
     </style>
@@ -41,14 +47,19 @@
     </div>
     <div class="controls">
         <textarea id="url-input" placeholder="Paste YouTube links (one per line)..."></textarea>
-        <button onclick="addVideos()">Add to Queue</button>
+        <div class="btn-row">
+            <button id="add-btn" class="add-btn" onclick="addVideos()">Add</button>
+            <button class="shuffle-btn" onclick="shuffleQueue()">Shuffle</button>
+            <button class="restore-btn" onclick="restoreQueue()">Restore</button>
+        </div>
     </div>
     <ul id="playlist"></ul>
 </div>
 
 <script>
     let player;
-    let playlist = JSON.parse(localStorage.getItem('yt_playlist')) || [];
+    let masterList = JSON.parse(localStorage.getItem('yt_master')) || [];
+    let queue = JSON.parse(localStorage.getItem('yt_queue')) || [...masterList];
     let currentIndex = 0;
 
     let tag = document.createElement('script');
@@ -62,10 +73,8 @@
             events: { 
                 'onReady': (event) => {
                     let iframe = event.target.getIframe();
-                    if (iframe) {
-                        iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
-                    }
-                    if (playlist.length > 0) playVideo(0);
+                    if (iframe) iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+                    if (queue.length > 0) playVideo(0);
                 },
                 'onStateChange': onPlayerStateChange 
             }
@@ -77,49 +86,103 @@
         return match ? match[1] : null;
     }
 
-    function savePlaylist() {
-        localStorage.setItem('yt_playlist', JSON.stringify(playlist));
+    async function fetchTitle(id) {
+        try {
+            let res = await fetch(`https://noembed.com/embed?dataType=json&url=https://www.youtube.com/watch?v=${id}`);
+            let data = await res.json();
+            return data.title || `Video ID: ${id}`;
+        } catch {
+            return `Video ID: ${id}`;
+        }
     }
 
-    function addVideos() {
+    function generateUID() {
+        return Date.now().toString(36) + Math.random().toString(36).substr(2);
+    }
+
+    function saveState() {
+        localStorage.setItem('yt_master', JSON.stringify(masterList));
+        localStorage.setItem('yt_queue', JSON.stringify(queue));
+    }
+
+    async function addVideos() {
         let input = document.getElementById('url-input');
+        let btn = document.getElementById('add-btn');
         let lines = input.value.split('\n');
         let addedCount = 0;
 
-        lines.forEach(line => {
+        btn.disabled = true;
+        btn.innerText = "...";
+
+        for (let line of lines) {
             let id = extractID(line.trim());
             if (id) {
-                playlist.push({ id: id, raw: line.trim() });
+                let title = await fetchTitle(id);
+                let trackInfo = { id: id, uid: generateUID(), raw: line.trim(), title: title };
+                masterList.push(trackInfo);
+                queue.push(trackInfo);
                 addedCount++;
             }
-        });
+        }
+
+        btn.disabled = false;
+        btn.innerText = "Add";
 
         if (addedCount === 0) {
-            alert('No valid YouTube links found.');
+            alert('No valid links.');
             return;
         }
 
         input.value = '';
-        savePlaylist();
-        renderPlaylist();
+        saveState();
+        renderQueue();
         
-        if (playlist.length === addedCount) {
+        if (queue.length === addedCount) {
             playVideo(0);
         }
     }
 
+    function shuffleQueue() {
+        if (queue.length < 2) return;
+        
+        let currentItem = queue[currentIndex];
+        
+        for (let i = queue.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [queue[i], queue[j]] = [queue[j], queue[i]];
+        }
+        
+        currentIndex = currentItem ? queue.findIndex(item => item.uid === currentItem.uid) : 0;
+        
+        saveState();
+        renderQueue();
+    }
+
+    function restoreQueue() {
+        if (masterList.length === 0) return;
+        
+        let currentItem = queue[currentIndex];
+        queue = [...masterList];
+        
+        currentIndex = currentItem ? queue.findIndex(item => item.uid === currentItem.uid) : 0;
+        if (currentIndex === -1) currentIndex = 0;
+        
+        saveState();
+        renderQueue();
+    }
+
     function playVideo(index) {
-        if (index < 0 || index >= playlist.length) return;
+        if (index < 0 || index >= queue.length) return;
         currentIndex = index;
         if (player && player.loadVideoById) {
-            player.loadVideoById(playlist[currentIndex].id);
+            player.loadVideoById(queue[currentIndex].id);
         }
-        renderPlaylist();
+        renderQueue();
     }
 
     function onPlayerStateChange(event) {
         if (event.data === 0) {
-            if (currentIndex + 1 < playlist.length) {
+            if (currentIndex + 1 < queue.length) {
                 playVideo(currentIndex + 1);
             }
         }
@@ -127,24 +190,37 @@
 
     function removeVideo(index, event) {
         event.stopPropagation();
-        playlist.splice(index, 1);
-        if (currentIndex >= playlist.length) currentIndex = playlist.length - 1;
-        savePlaylist();
-        renderPlaylist();
+        
+        let targetUID = queue[index].uid;
+        
+        // Remove from active queue
+        queue.splice(index, 1);
+        if (currentIndex > index || currentIndex >= queue.length) {
+            currentIndex = Math.max(0, currentIndex - 1);
+        }
+        
+        // Remove from master list
+        let masterIndex = masterList.findIndex(item => item.uid === targetUID);
+        if (masterIndex > -1) {
+            masterList.splice(masterIndex, 1);
+        }
+
+        saveState();
+        renderQueue();
     }
 
-    function renderPlaylist() {
+    function renderQueue() {
         let listEl = document.getElementById('playlist');
         listEl.innerHTML = '';
         
-        if (playlist.length === 0) {
+        if (queue.length === 0) {
             listEl.innerHTML = '<li style="color: #666; justify-content: center;">Queue is empty</li>';
             return;
         }
 
-        playlist.forEach((item, index) => {
+        queue.forEach((item, index) => {
             let li = document.createElement('li');
-            li.innerHTML = `<span>Track ${index + 1} (${item.id})</span>`;
+            li.innerHTML = `<span class="title-text">${index + 1}. ${item.title}</span>`;
             if (index === currentIndex) li.classList.add('active');
             li.onclick = () => playVideo(index);
             
@@ -158,7 +234,7 @@
         });
     }
 
-    renderPlaylist();
+    renderQueue();
 </script>
 
 </body>
