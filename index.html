@@ -23,12 +23,15 @@
         textarea { width: 100%; background: #222; color: #fff; border: 1px solid #333; padding: 12px; border-radius: 8px; font-size: 14px; outline: none; resize: vertical; min-height: 80px; }
         textarea:focus { border-color: #3ea6ff; }
         .btn-row { display: flex; gap: 8px; }
-        button { color: #fff; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; flex: 1; }
-        button:active { opacity: 0.8; }
+        button, label.file-btn { color: #fff; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; flex: 1; text-align: center; font-size: 13px; display: inline-block; }
+        button:active, label.file-btn:active { opacity: 0.8; }
         button:disabled { background: #555 !important; cursor: not-allowed; }
         .add-btn { background: #ff0000; }
+        .file-btn { background: #333; border: 1px solid #444; }
         .shuffle-btn { background: #3ea6ff; color: #000; }
         .restore-btn { background: #444; }
+        .clear-btn { background: #551111; }
+        input[type="file"] { display: none; }
         ul { list-style: none; padding: 0; margin: 0; max-height: 35vh; overflow-y: auto; background: #181818; border-radius: 12px; border: 1px solid #282828; }
         li { padding: 12px 16px; border-bottom: 1px solid #282828; display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer; }
         li:last-child { border-bottom: none; }
@@ -48,9 +51,14 @@
     <div class="controls">
         <textarea id="url-input" placeholder="Paste YouTube links (one per line)..."></textarea>
         <div class="btn-row">
-            <button id="add-btn" class="add-btn" onclick="addVideos()">Add</button>
+            <button id="add-btn" class="add-btn" onclick="processLinesFromTextarea()">Add</button>
+            <label class="file-btn" for="file-upload">Upload .txt</label>
+            <input type="file" id="file-upload" accept=".txt" onchange="handleFileUpload(event)">
+        </div>
+        <div class="btn-row">
             <button class="shuffle-btn" onclick="shuffleQueue()">Shuffle</button>
             <button class="restore-btn" onclick="restoreQueue()">Restore</button>
+            <button class="clear-btn" onclick="clearAll()">Clear All</button>
         </div>
     </div>
     <ul id="playlist"></ul>
@@ -105,68 +113,113 @@
         localStorage.setItem('yt_queue', JSON.stringify(queue));
     }
 
-    async function addVideos() {
-        let input = document.getElementById('url-input');
+    async function addVideos(lines) {
         let btn = document.getElementById('add-btn');
-        let lines = input.value.split('\n');
-        let addedCount = 0;
-
         btn.disabled = true;
         btn.innerText = "...";
 
+        let newEntries = [];
+        let duplicateCount = 0;
+
         for (let line of lines) {
-            let id = extractID(line.trim());
+            let cleanLine = line.trim();
+            if (!cleanLine) continue;
+            let id = extractID(cleanLine);
             if (id) {
+                let exists = masterList.some(item => item.id === id) || newEntries.some(item => item.id === id);
+                if (exists) {
+                    duplicateCount++;
+                    continue;
+                }
                 let title = await fetchTitle(id);
-                let trackInfo = { id: id, uid: generateUID(), raw: line.trim(), title: title };
-                masterList.push(trackInfo);
-                queue.push(trackInfo);
-                addedCount++;
+                newEntries.push({ id: id, uid: generateUID(), raw: cleanLine, title: title });
+            }
+        }
+
+        if (duplicateCount > 0) {
+            let skipDups = confirm(`Found ${duplicateCount} duplicate video(s) already in your library. Skip them?`);
+            if (!skipDups) {
+                for (let line of lines) {
+                    let cleanLine = line.trim();
+                    if (!cleanLine) continue;
+                    let id = extractID(cleanLine);
+                    if (id && masterList.some(item => item.id === id) && !newEntries.some(item => item.id === id && item.raw === cleanLine)) {
+                        let title = await fetchTitle(id);
+                        newEntries.push({ id: id, uid: generateUID(), raw: cleanLine, title: title });
+                    }
+                }
             }
         }
 
         btn.disabled = false;
         btn.innerText = "Add";
 
-        if (addedCount === 0) {
-            alert('No valid links.');
+        if (newEntries.length === 0) {
+            if (duplicateCount === 0) alert('No valid links found.');
             return;
         }
 
-        input.value = '';
+        let wasEmpty = queue.length === 0;
+        masterList.push(...newEntries);
+        queue.push(...newEntries);
+
         saveState();
         renderQueue();
-        
-        if (queue.length === addedCount) {
+
+        if (wasEmpty) {
             playVideo(0);
+        }
+    }
+
+    function processLinesFromTextarea() {
+        let input = document.getElementById('url-input');
+        let lines = input.value.split('\n');
+        input.value = '';
+        addVideos(lines);
+    }
+
+    function handleFileUpload(event) {
+        let file = event.target.files[0];
+        if (!file) return;
+        let reader = new FileReader();
+        reader.onload = function(e) {
+            let lines = e.target.result.split('\n');
+            addVideos(lines);
+            event.target.value = '';
+        };
+        reader.readAsText(file);
+    }
+
+    function clearAll() {
+        if (!confirm('Are you sure you want to delete all videos from the master list and queue?')) return;
+        masterList = [];
+        queue = [];
+        currentIndex = 0;
+        saveState();
+        renderQueue();
+        if (player && player.stopVideo) {
+            player.stopVideo();
         }
     }
 
     function shuffleQueue() {
         if (queue.length < 2) return;
-        
         let currentItem = queue[currentIndex];
-        
         for (let i = queue.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [queue[i], queue[j]] = [queue[j], queue[i]];
         }
-        
         currentIndex = currentItem ? queue.findIndex(item => item.uid === currentItem.uid) : 0;
-        
         saveState();
         renderQueue();
     }
 
     function restoreQueue() {
         if (masterList.length === 0) return;
-        
         let currentItem = queue[currentIndex];
         queue = [...masterList];
-        
         currentIndex = currentItem ? queue.findIndex(item => item.uid === currentItem.uid) : 0;
         if (currentIndex === -1) currentIndex = 0;
-        
         saveState();
         renderQueue();
     }
@@ -190,21 +243,15 @@
 
     function removeVideo(index, event) {
         event.stopPropagation();
-        
         let targetUID = queue[index].uid;
-        
-        // Remove from active queue
         queue.splice(index, 1);
         if (currentIndex > index || currentIndex >= queue.length) {
             currentIndex = Math.max(0, currentIndex - 1);
         }
-        
-        // Remove from master list
         let masterIndex = masterList.findIndex(item => item.uid === targetUID);
         if (masterIndex > -1) {
             masterList.splice(masterIndex, 1);
         }
-
         saveState();
         renderQueue();
     }
