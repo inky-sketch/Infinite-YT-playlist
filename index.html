@@ -23,15 +23,21 @@
         textarea { width: 100%; background: #222; color: #fff; border: 1px solid #333; padding: 12px; border-radius: 8px; font-size: 14px; outline: none; resize: vertical; min-height: 80px; }
         textarea:focus { border-color: #3ea6ff; }
         .btn-row { display: flex; gap: 8px; }
-        button, label.file-btn { color: #fff; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; flex: 1; text-align: center; font-size: 13px; display: inline-block; }
+        button, label.file-btn { color: #fff; border: none; padding: 10px; border-radius: 8px; font-weight: bold; cursor: pointer; flex: 1; text-align: center; font-size: 13px; display: inline-block; }
         button:active, label.file-btn:active { opacity: 0.8; }
         button:disabled { background: #555 !important; cursor: not-allowed; }
         .add-btn { background: #ff0000; }
         .file-btn { background: #333; border: 1px solid #444; }
         .shuffle-btn { background: #3ea6ff; color: #000; }
         .restore-btn { background: #444; }
+        .export-btn { background: #2a8b2a; }
         .clear-btn { background: #551111; }
         input[type="file"] { display: none; }
+        
+        #progress-container { display: none; width: 100%; background: #222; border-radius: 8px; overflow: hidden; position: relative; height: 24px; margin-bottom: 8px; }
+        #progress-bar { height: 100%; width: 0%; background: #3ea6ff; transition: width 0.2s; }
+        #progress-text { position: absolute; width: 100%; text-align: center; top: 3px; font-size: 12px; font-weight: bold; color: #fff; text-shadow: 1px 1px 2px #000; }
+
         ul { list-style: none; padding: 0; margin: 0; max-height: 35vh; overflow-y: auto; background: #181818; border-radius: 12px; border: 1px solid #282828; }
         li { padding: 12px 16px; border-bottom: 1px solid #282828; display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer; }
         li:last-child { border-bottom: none; }
@@ -48,17 +54,26 @@
     <div id="player-container">
         <div id="yt-player"></div>
     </div>
+    
+    <div id="progress-container">
+        <div id="progress-bar"></div>
+        <div id="progress-text">0 / 0</div>
+    </div>
+
     <div class="controls">
         <textarea id="url-input" placeholder="Paste YouTube links (one per line)..."></textarea>
+        
         <div class="btn-row">
             <button id="add-btn" class="add-btn" onclick="processLinesFromTextarea()">Add</button>
             <label class="file-btn" for="file-upload">Upload .txt</label>
             <input type="file" id="file-upload" accept=".txt" onchange="handleFileUpload(event)">
         </div>
+        
         <div class="btn-row">
             <button class="shuffle-btn" onclick="shuffleQueue()">Shuffle</button>
             <button class="restore-btn" onclick="restoreQueue()">Restore</button>
-            <button class="clear-btn" onclick="clearAll()">Clear All</button>
+            <button class="export-btn" onclick="exportList()">Export</button>
+            <button class="clear-btn" onclick="clearAll()">Clear</button>
         </div>
     </div>
     <ul id="playlist"></ul>
@@ -114,48 +129,53 @@
     }
 
     async function addVideos(lines) {
+        let validLines = lines.map(l => l.trim()).filter(l => l);
+        if (validLines.length === 0) return;
+
         let btn = document.getElementById('add-btn');
+        let progCont = document.getElementById('progress-container');
+        let progBar = document.getElementById('progress-bar');
+        let progText = document.getElementById('progress-text');
+
         btn.disabled = true;
-        btn.innerText = "...";
+        progCont.style.display = 'block';
 
         let newEntries = [];
-        let duplicateCount = 0;
+        let duplicateEntries = [];
+        let total = validLines.length;
 
-        for (let line of lines) {
-            let cleanLine = line.trim();
-            if (!cleanLine) continue;
+        for (let i = 0; i < total; i++) {
+            let cleanLine = validLines[i];
             let id = extractID(cleanLine);
+            
+            progBar.style.width = `${((i + 1) / total) * 100}%`;
+            progText.innerText = `Processing ${i + 1} / ${total}`;
+
             if (id) {
-                let exists = masterList.some(item => item.id === id) || newEntries.some(item => item.id === id);
-                if (exists) {
-                    duplicateCount++;
-                    continue;
+                let existingItem = masterList.find(item => item.id === id) || newEntries.find(item => item.id === id);
+                
+                if (existingItem) {
+                    duplicateEntries.push({ id: id, uid: generateUID(), raw: cleanLine, title: existingItem.title });
+                } else {
+                    let title = await fetchTitle(id);
+                    newEntries.push({ id: id, uid: generateUID(), raw: cleanLine, title: title });
                 }
-                let title = await fetchTitle(id);
-                newEntries.push({ id: id, uid: generateUID(), raw: cleanLine, title: title });
             }
         }
 
-        if (duplicateCount > 0) {
-            let skipDups = confirm(`Found ${duplicateCount} duplicate video(s) already in your library. Skip them?`);
+        if (duplicateEntries.length > 0) {
+            let skipDups = confirm(`Found ${duplicateEntries.length} duplicate video(s). Skip them?\n(OK = Skip, Cancel = Add Anyway)`);
             if (!skipDups) {
-                for (let line of lines) {
-                    let cleanLine = line.trim();
-                    if (!cleanLine) continue;
-                    let id = extractID(cleanLine);
-                    if (id && masterList.some(item => item.id === id) && !newEntries.some(item => item.id === id && item.raw === cleanLine)) {
-                        let title = await fetchTitle(id);
-                        newEntries.push({ id: id, uid: generateUID(), raw: cleanLine, title: title });
-                    }
-                }
+                newEntries.push(...duplicateEntries);
             }
         }
 
         btn.disabled = false;
-        btn.innerText = "Add";
+        progCont.style.display = 'none';
+        progBar.style.width = '0%';
 
         if (newEntries.length === 0) {
-            if (duplicateCount === 0) alert('No valid links found.');
+            if (duplicateEntries.length === 0) alert('No valid links found.');
             return;
         }
 
@@ -166,9 +186,7 @@
         saveState();
         renderQueue();
 
-        if (wasEmpty) {
-            playVideo(0);
-        }
+        if (wasEmpty) playVideo(0);
     }
 
     function processLinesFromTextarea() {
@@ -188,6 +206,20 @@
             event.target.value = '';
         };
         reader.readAsText(file);
+    }
+
+    function exportList() {
+        if (masterList.length === 0) {
+            alert("The master list is empty.");
+            return;
+        }
+        let urls = masterList.map(item => item.raw).join('\n');
+        let blob = new Blob([urls], { type: 'text/plain' });
+        let a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'youtube_master_list.txt';
+        a.click();
+        URL.revokeObjectURL(a.href);
     }
 
     function clearAll() {
