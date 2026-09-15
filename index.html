@@ -16,9 +16,9 @@
             flex-direction: column; 
             align-items: center; 
         }
-        .container { width: 100%; max-width: 480px; }
+        .container { width: 100%; max-width: 480px; position: relative; }
         h2 { font-size: 1.2rem; margin-top: 0; text-align: center; color: #aaa; }
-        #player-container { width: 100%; aspect-ratio: 16/9; background: #000; margin-bottom: 12px; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+        #player-container { width: 100%; aspect-ratio: 16/9; background: #000; margin-bottom: 8px; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
         
         .section { background: #181818; border: 1px solid #282828; padding: 12px; border-radius: 12px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
         
@@ -29,7 +29,7 @@
         .btn-row { display: flex; gap: 8px; }
         button, label.file-btn { color: #fff; border: none; padding: 10px; border-radius: 8px; font-weight: bold; cursor: pointer; flex: 1; text-align: center; font-size: 13px; display: inline-block; }
         button:active, label.file-btn:active { opacity: 0.8; }
-        button:disabled { background: #555 !important; cursor: not-allowed; }
+        button:disabled { background: #555 !important; color: #888; cursor: not-allowed; }
         
         .add-btn { background: #ff0000; }
         .file-btn { background: #333; border: 1px solid #444; }
@@ -37,6 +37,7 @@
         .restore-btn { background: #444; }
         .export-btn { background: #2a8b2a; }
         .clear-btn { background: #551111; }
+        .skip-btn { background: #222; border: 1px solid #444; }
         input[type="file"] { display: none; }
         
         #progress-container { display: none; width: 100%; background: #222; border-radius: 8px; overflow: hidden; position: relative; height: 24px; margin-bottom: 8px; }
@@ -52,9 +53,22 @@
         .title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 85%; }
         .del-btn { background: none; color: #aaa; border: none; cursor: pointer; font-size: 16px; padding: 4px; }
         .del-btn:hover { color: #ff4444; }
+
+        #idle-screen { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: #000; color: #fff; z-index: 10000; display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 20px; }
+        #idle-screen svg { margin-bottom: 24px; opacity: 0.9; }
+        #idle-title { font-size: 24px; font-weight: bold; margin: 0 0 8px 0; max-width: 90%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        #idle-artist { font-size: 16px; color: #aaa; margin: 0; max-width: 90%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     </style>
 </head>
 <body>
+
+<div id="idle-screen">
+    <svg width="64" height="64" viewBox="0 0 24 24" fill="white">
+        <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+    </svg>
+    <p id="idle-title"></p>
+    <p id="idle-artist"></p>
+</div>
 
 <div class="container">
     <h2>Infinite YouTube Playlists</h2>
@@ -62,7 +76,11 @@
         <div id="yt-player"></div>
     </div>
     
-    <!-- Playlist Management Section -->
+    <div class="btn-row" style="margin-bottom: 12px;">
+        <button class="skip-btn" onclick="playPrev()">&#9664; Prev</button>
+        <button class="skip-btn" onclick="playNext()">Next &#9654;</button>
+    </div>
+
     <div class="section">
         <div class="btn-row">
             <select id="playlist-select" onchange="switchPlaylist(this.value)"></select>
@@ -75,7 +93,6 @@
         </div>
     </div>
 
-    <!-- Front & Center Shuffle / Restore Controls -->
     <div class="section" style="background: #1f1f1f; border-color: #444;">
         <div class="btn-row">
             <button class="shuffle-btn" onclick="shuffleQueue()">Shuffle Queue</button>
@@ -88,7 +105,6 @@
         <div id="progress-text">0 / 0</div>
     </div>
 
-    <!-- Add & Search Controls -->
     <div class="section">
         <textarea id="url-input" placeholder="Paste YouTube links (one per line)..."></textarea>
         <div class="btn-row">
@@ -100,11 +116,15 @@
             <input type="text" id="search-input" placeholder="Search playlist..." oninput="renderQueue()">
             <select id="sort-select" onchange="sortQueue(this.value)">
                 <option value="default">Sort: Default</option>
-                <option value="az">Sort: A-Z</option>
-                <option value="za">Sort: Z-A</option>
+                <option value="az">Sort: A-Z (Title)</option>
+                <option value="za">Sort: Z-A (Title)</option>
+                <option value="artist-az">Sort: A-Z (Artist)</option>
             </select>
         </div>
-        <button class="clear-btn" onclick="clearActivePlaylist()">Clear Active Playlist</button>
+        <div class="btn-row">
+            <button id="undo-btn" class="restore-btn" onclick="undoRemove()" disabled>Undo Remove</button>
+            <button class="clear-btn" onclick="clearActivePlaylist()">Clear Active Playlist</button>
+        </div>
     </div>
 
     <div class="meta-info">
@@ -125,6 +145,8 @@
         currentPlaylistId = Object.keys(playlists)[0];
     }
     let currentIndex = 0;
+    let lastDeleted = null;
+    let idleTimer;
 
     let tag = document.createElement('script');
     tag.src = "https://www.youtube.com/iframe_api";
@@ -151,6 +173,28 @@
         localStorage.setItem('yt_current_playlist', currentPlaylistId);
     }
 
+    function resetIdleTimer() {
+        document.getElementById('idle-screen').style.display = 'none';
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(showIdleScreen, 10000);
+    }
+
+    function showIdleScreen() {
+        let cp = playlists[currentPlaylistId];
+        if (cp.queue.length === 0) return;
+        let item = cp.queue[currentIndex];
+        if (item) {
+            document.getElementById('idle-title').innerText = item.title;
+            document.getElementById('idle-artist').innerText = item.author || "Unknown Artist";
+            document.getElementById('idle-screen').style.display = 'flex';
+        }
+    }
+
+    ['mousemove', 'keydown', 'touchstart', 'scroll', 'click'].forEach(evt => 
+        window.addEventListener(evt, resetIdleTimer)
+    );
+    resetIdleTimer();
+
     function updatePlaylistDropdown() {
         let select = document.getElementById('playlist-select');
         select.innerHTML = '';
@@ -171,6 +215,8 @@
         playlists[id] = { name: name.trim(), master: [], queue: [] };
         currentPlaylistId = id;
         currentIndex = 0;
+        lastDeleted = null;
+        document.getElementById('undo-btn').disabled = true;
         saveState();
         updatePlaylistDropdown();
         renderQueue();
@@ -180,6 +226,8 @@
     function switchPlaylist(id) {
         currentPlaylistId = id;
         currentIndex = 0;
+        lastDeleted = null;
+        document.getElementById('undo-btn').disabled = true;
         saveState();
         updatePlaylistDropdown();
         renderQueue();
@@ -201,6 +249,8 @@
         delete playlists[currentPlaylistId];
         currentPlaylistId = Object.keys(playlists)[0];
         currentIndex = 0;
+        lastDeleted = null;
+        document.getElementById('undo-btn').disabled = true;
         saveState();
         updatePlaylistDropdown();
         renderQueue();
@@ -216,13 +266,13 @@
         return match ? match[1] : null;
     }
 
-    async function fetchTitle(id) {
+    async function fetchVideoData(id) {
         try {
             let res = await fetch(`https://noembed.com/embed?dataType=json&url=https://www.youtube.com/watch?v=${id}`);
             let data = await res.json();
-            return data.title || `Video ID: ${id}`;
+            return { title: data.title || `Video ID: ${id}`, author: data.author_name || 'Unknown Artist' };
         } catch {
-            return `Video ID: ${id}`;
+            return { title: `Video ID: ${id}`, author: 'Unknown Artist' };
         }
     }
 
@@ -258,10 +308,10 @@
                 let existingItem = cp.master.find(item => item.id === id) || newEntries.find(item => item.id === id);
                 
                 if (existingItem) {
-                    duplicateEntries.push({ id: id, uid: generateUID(), raw: cleanLine, title: existingItem.title });
+                    duplicateEntries.push({ id: id, uid: generateUID(), raw: cleanLine, title: existingItem.title, author: existingItem.author });
                 } else {
-                    let title = await fetchTitle(id);
-                    newEntries.push({ id: id, uid: generateUID(), raw: cleanLine, title: title });
+                    let vData = await fetchVideoData(id);
+                    newEntries.push({ id: id, uid: generateUID(), raw: cleanLine, title: vData.title, author: vData.author });
                 }
             }
         }
@@ -348,6 +398,8 @@
         cp.master = [];
         cp.queue = [];
         currentIndex = 0;
+        lastDeleted = null;
+        document.getElementById('undo-btn').disabled = true;
         saveState();
         renderQueue();
         if (player && player.stopVideo) player.stopVideo();
@@ -389,8 +441,11 @@
         cp.queue.sort((a, b) => {
             let tA = a.title.toLowerCase();
             let tB = b.title.toLowerCase();
+            let aA = (a.author || "").toLowerCase();
+            let aB = (b.author || "").toLowerCase();
             if (order === 'az') return tA.localeCompare(tB);
             if (order === 'za') return tB.localeCompare(tA);
+            if (order === 'artist-az') return aA.localeCompare(aB) || tA.localeCompare(tB);
             return 0;
         });
         currentIndex = currentItem ? cp.queue.findIndex(item => item.uid === currentItem.uid) : 0;
@@ -408,33 +463,63 @@
         renderQueue();
     }
 
-    function onPlayerStateChange(event) {
+    function playNext() {
         let cp = playlists[currentPlaylistId];
+        if (currentIndex + 1 < cp.queue.length) {
+            playVideo(currentIndex + 1);
+        }
+    }
+
+    function playPrev() {
+        if (currentIndex > 0) {
+            playVideo(currentIndex - 1);
+        }
+    }
+
+    function onPlayerStateChange(event) {
         if (event.data === 0) {
-            if (currentIndex + 1 < cp.queue.length) {
-                playVideo(currentIndex + 1);
-            }
+            playNext();
         }
     }
 
     function removeVideo(index, event, actualItemUID) {
         event.stopPropagation();
         let cp = playlists[currentPlaylistId];
-        let targetUID = actualItemUID;
         
-        let qIndex = cp.queue.findIndex(i => i.uid === targetUID);
-        if (qIndex > -1) {
-            cp.queue.splice(qIndex, 1);
-            if (currentIndex > qIndex || currentIndex >= cp.queue.length) {
-                currentIndex = Math.max(0, currentIndex - 1);
-            }
+        let qIndex = cp.queue.findIndex(i => i.uid === actualItemUID);
+        let mIndex = cp.master.findIndex(i => i.uid === actualItemUID);
+        
+        if (qIndex === -1) return;
+
+        let removedQueueItem = cp.queue[qIndex];
+        let removedMasterItem = mIndex > -1 ? cp.master[mIndex] : removedQueueItem;
+
+        lastDeleted = { queueItem: removedQueueItem, masterItem: removedMasterItem };
+        document.getElementById('undo-btn').disabled = false;
+
+        cp.queue.splice(qIndex, 1);
+        if (currentIndex > qIndex || currentIndex >= cp.queue.length) {
+            currentIndex = Math.max(0, currentIndex - 1);
         }
         
-        let masterIndex = cp.master.findIndex(item => item.uid === targetUID);
-        if (masterIndex > -1) {
-            cp.master.splice(masterIndex, 1);
+        if (mIndex > -1) {
+            cp.master.splice(mIndex, 1);
         }
 
+        saveState();
+        renderQueue();
+    }
+
+    function undoRemove() {
+        if (!lastDeleted) return;
+        let cp = playlists[currentPlaylistId];
+        
+        cp.master.push(lastDeleted.masterItem);
+        cp.queue.push(lastDeleted.queueItem);
+        
+        lastDeleted = null;
+        document.getElementById('undo-btn').disabled = true;
+        
         saveState();
         renderQueue();
     }
@@ -447,7 +532,7 @@
         
         document.getElementById('video-count').innerText = `Total Videos: ${cp.queue.length}`;
 
-        let filtered = cp.queue.filter(item => item.title.toLowerCase().includes(query) || item.id.toLowerCase().includes(query));
+        let filtered = cp.queue.filter(item => item.title.toLowerCase().includes(query) || item.id.toLowerCase().includes(query) || (item.author && item.author.toLowerCase().includes(query)));
 
         if (filtered.length === 0) {
             listEl.innerHTML = '<li style="color: #666; justify-content: center;">No tracks found</li>';
