@@ -44,7 +44,8 @@
         #progress-bar { height: 100%; width: 0%; background: #3ea6ff; transition: width 0.2s; }
         #progress-text { position: absolute; width: 100%; text-align: center; top: 3px; font-size: 12px; font-weight: bold; color: #fff; text-shadow: 1px 1px 2px #000; }
 
-        .meta-info { display: flex; justify-content: space-between; font-size: 12px; color: #888; padding: 0 4px; margin-bottom: 6px; }
+        .meta-info { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #888; padding: 0 4px; margin-bottom: 6px; }
+        .toggle-label { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
 
         ul { list-style: none; padding: 0; margin: 0; max-height: 35vh; overflow-y: auto; background: #181818; border-radius: 12px; border: 1px solid #282828; }
         li { padding: 12px 16px; border-bottom: 1px solid #282828; display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer; }
@@ -129,6 +130,10 @@
 
     <div class="meta-info">
         <span id="video-count">Total Videos: 0</span>
+        <label class="toggle-label">
+            <input type="checkbox" id="idle-toggle" onchange="toggleIdleSetting(this.checked)">
+            Idle Screen
+        </label>
         <span id="playlist-name-display">Active: Main</span>
     </div>
 
@@ -147,6 +152,7 @@
     let currentIndex = 0;
     let lastDeleted = null;
     let idleTimer;
+    let idleEnabled = localStorage.getItem('yt_idle_enabled') !== 'false';
 
     let tag = document.createElement('script');
     tag.src = "https://www.youtube.com/iframe_api";
@@ -173,13 +179,27 @@
         localStorage.setItem('yt_current_playlist', currentPlaylistId);
     }
 
+    function toggleIdleSetting(enabled) {
+        idleEnabled = enabled;
+        localStorage.setItem('yt_idle_enabled', enabled ? 'true' : 'false');
+        if (!enabled) {
+            clearTimeout(idleTimer);
+            document.getElementById('idle-screen').style.display = 'none';
+        } else {
+            resetIdleTimer();
+        }
+    }
+
     function resetIdleTimer() {
         document.getElementById('idle-screen').style.display = 'none';
         clearTimeout(idleTimer);
-        idleTimer = setTimeout(showIdleScreen, 10000);
+        if (idleEnabled) {
+            idleTimer = setTimeout(showIdleScreen, 10000);
+        }
     }
 
     function showIdleScreen() {
+        if (!idleEnabled) return;
         let cp = playlists[currentPlaylistId];
         if (cp.queue.length === 0) return;
         let item = cp.queue[currentIndex];
@@ -193,6 +213,8 @@
     ['mousemove', 'keydown', 'touchstart', 'scroll', 'click'].forEach(evt => 
         window.addEventListener(evt, resetIdleTimer)
     );
+
+    document.getElementById('idle-toggle').checked = idleEnabled;
     resetIdleTimer();
 
     function updatePlaylistDropdown() {
